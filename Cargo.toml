@@ -1,0 +1,74 @@
+[package]
+name = "lime-dlp"
+version = "3.5.1"
+edition = "2024"
+description = "a very simple GUI for ytdlp written in Rust"
+license = "GPL-3.0"
+repository = "https://github.com/BKSalman/lime-dlp"
+homepage = "https://github.com/BKSalman"
+readme = "README.md"
+authors = ["Salman Abuhaimed"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+  "xtask"
+]
+
+[dependencies]
+chrono = { version = "0.4.41", default-features = false, features = ["clock"] }
+dirs = "6.0.0"
+iced = { version = "0.14.0", features = ["tokio", "advanced-shaping"] }
+iced_aw = { version = "0.13", features = ["tabs"], default-features = false }
+iced_fonts = "0.1.1"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shared_child = "1"
+thiserror = "2"
+toml = "0.8.23"
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+url = "2.5.4"
+i18n-embed-fl = "0.9.2"
+rust-embed = "8.7.2"
+shellexpand = { version = "3.1.1", default-features = false, features = ["base-0", "tilde"] }
+notify-rust = "4.11.7"
+reqwest = { version = "0.13.3", features = ["json"] }
+open = "5.3.4"
+iced_core = "0.14.0"
+iced_widget = "0.14.2"
+
+[dependencies.i18n-embed]
+version = "0.15"
+features = ["fluent-system", "desktop-requester"]
+
+[features]
+hot-reload = [
+  "iced/hot"
+]
+explain = []
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/lime-dlp", dest = "/usr/bin/lime-dlp", mode = "755" },
+  { source = "data/applications/lime-dlp.desktop", dest = "/usr/share/applications/lime-dlp.desktop", mode = "644" },
+  { source = "data/icons/*/apps/lime-dlp.png", dest = "/usr/share/icons/hicolor/", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+yt-dlp = "*"
+"(ffmpeg or ffmpeg-free)" = "*"
+
+[package.metadata.deb]
+depends = "yt-dlp, ffmpeg"
+assets = [
+    ["target/release/lime-dlp", "usr/bin/", "755"],
+    ["data/applications/lime-dlp.desktop", "usr/share/applications/", "644"],
+    ["data/icons/*/apps/lime-dlp.png", "usr/share/icons/hicolor/", "644"],
+]
+
+[package.metadata.aur]
+depends = ["ffmpeg", "yt-dlp"]

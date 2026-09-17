@@ -1,0 +1,190 @@
+use shared_child::SharedChild;
+use std::{
+    io::{BufRead, BufReader, Read},
+    path::PathBuf,
+    process::Stdio,
+    sync::Arc,
+};
+
+use iced::futures::channel::mpsc::UnboundedSender;
+
+use crate::error::DownloadError;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[derive(Default)]
+pub struct Command {
+    pub shared_child: Option<Arc<SharedChild>>,
+    videos_num: usize,
+}
+
+pub fn resolve_bin_path(configured_path: Option<PathBuf>) -> PathBuf {
+    if let Some(ref path) = configured_path {
+        if path.exists() && path.is_file() {
+            return path.clone();
+        }
+    }
+
+    if let Ok(mut exe_path) = std::env::current_exe() {
+        exe_path.pop(); // remove executable name
+
+        let mut bin_in_exe_dir = exe_path.clone();
+        bin_in_exe_dir.push(if cfg!(target_os = "windows") {
+            "yt-dlp.exe"
+        } else {
+            "yt-dlp"
+        });
+        if bin_in_exe_dir.exists() && bin_in_exe_dir.is_file() {
+            return bin_in_exe_dir;
+        }
+
+        let mut bin_in_assets = exe_path.clone();
+        bin_in_assets.push("assets");
+        bin_in_assets.push(if cfg!(target_os = "windows") {
+            "yt-dlp.exe"
+        } else {
+            "yt-dlp"
+        });
+        if bin_in_assets.exists() && bin_in_assets.is_file() {
+            return bin_in_assets;
+        }
+    }
+
+    let bin_name = if cfg!(target_os = "windows") {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
+    if let Some(paths) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&paths) {
+            let candidate = path.join(bin_name);
+            if candidate.exists() && candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    configured_path.unwrap_or_else(|| PathBuf::from(bin_name))
+}
+
+impl Command {
+    pub fn is_multiple_videos(&self) -> bool {
+        self.videos_num > 1
+    }
+
+    pub fn finished_single_video(&mut self) {
+        self.videos_num -= 1;
+    }
+
+    pub fn kill(&mut self) {
+        if let Some(child) = self.shared_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    pub fn start(
+        &mut self,
+        mut args: Vec<&str>,
+        bin_path: Option<PathBuf>,
+        sender: UnboundedSender<crate::Message>,
+        videos_num: usize,
+        _show_console: bool,
+    ) -> Option<Result<String, DownloadError>> {
+        self.kill();
+
+        self.videos_num = videos_num;
+
+        let actual_bin_path = resolve_bin_path(bin_path);
+        let mut command = std::process::Command::new(actual_bin_path);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let print = [
+            "--print",
+            r#"before_dl:__{"type": "pre_download", "video_id": "%(id)s"}"#,
+            "--print",
+            r#"playlist:__{"type": "end_of_playlist"}"#,
+            "--print",
+            r#"after_video:__{"type": "end_of_video"}"#,
+        ];
+
+        let template = concat!(
+            r#"__{"type": "downloading","#,
+            r#""eta": %(progress.eta)s, "downloaded_bytes": %(progress.downloaded_bytes)s,"#,
+            r#""total_bytes": %(progress.total_bytes)s, "total_bytes_estimate": %(progress.total_bytes_estimate)s,"#,
+            r#""elapsed": %(progress.elapsed)s, "speed": %(progress.speed)s, "playlist_count": %(info.playlist_count)s,"#,
+            r#""playlist_index": %(info.playlist_index)s }"#
+        );
+
+        let progess_template = ["--progress-template", template];
+
+        args.extend_from_slice(&print);
+        args.extend_from_slice(&progess_template);
+        args.push("--no-quiet");
+
+        let Ok(shared_child) = SharedChild::spawn(
+            command
+                .args(args)
+                .stderr(Stdio::piped())
+                .stdout(Stdio::piped()),
+        ) else {
+            return Some(Err(DownloadError::YtDlpMissing));
+        };
+
+        self.shared_child = Some(Arc::new(shared_child));
+
+        let Some(child) = self.shared_child.clone() else {
+            return Some(Err(DownloadError::Other));
+        };
+
+        if let Some(stderr) = child.take_stderr() {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = sender
+                        .unbounded_send(crate::Message::ProgressEvent(format!("stderr:{line}")));
+                }
+            });
+        }
+
+        if let Some(stdout) = child.take_stdout() {
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                let mut buffer = Vec::new();
+                let mut byte = [0u8; 1];
+
+                loop {
+                    match reader.read(&mut byte) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if byte[0] == b'\r' || byte[0] == b'\n' {
+                                if !buffer.is_empty() {
+                                    let text = String::from_utf8_lossy(&buffer).to_string();
+                                    let _ =
+                                        sender.unbounded_send(crate::Message::ProgressEvent(text));
+                                    buffer.clear();
+                                }
+                            } else {
+                                buffer.push(byte[0]);
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        Some(Ok(String::from("Initializing...")))
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.shared_child.is_some()
+    }
+}
