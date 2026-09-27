@@ -19,33 +19,56 @@ pub struct Command {
     videos_num: usize,
 }
 
-pub fn bundled_bin_path() -> Option<PathBuf> {
-    let bin_name = if cfg!(target_os = "windows") {
+fn bin_name() -> &'static str {
+    if cfg!(target_os = "windows") {
         "yt-dlp.exe"
     } else {
         "yt-dlp"
-    };
-    let executable = std::env::current_exe().ok()?;
-    let executable_dir = executable.parent()?;
-    std::iter::once(executable_dir.to_path_buf())
-        .chain(std::iter::once(executable_dir.join("assets")))
-        .chain(
+    }
+}
+
+fn existing_file(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
+}
+
+pub fn bundled_bin_path() -> Option<PathBuf> {
+    let mut directories = Vec::new();
+
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(executable_dir) = executable.parent()
+    {
+        directories.push(executable_dir.to_path_buf());
+        directories.push(executable_dir.join("assets"));
+        directories.push(executable_dir.join("bin(assets)"));
+        directories.extend(
             executable_dir
                 .ancestors()
                 .map(|dir| dir.join("bin(assets)")),
-        )
-        .map(|dir| dir.join(bin_name))
-        .find(|path| path.is_file())
+        );
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        directories.push(current_dir.clone());
+        directories.push(current_dir.join("assets"));
+        directories.push(current_dir.join("bin(assets)"));
+    }
+
+    directories
+        .into_iter()
+        .map(|directory| directory.join(bin_name()))
+        .find_map(existing_file)
 }
 
 pub fn resolve_bin_path(configured_path: Option<PathBuf>) -> PathBuf {
     if let Some(ref path) = configured_path {
-        if path.exists() && path.is_file() {
+        if path.is_file() {
             return path.clone();
         }
     }
 
-    if let Some(path) = crate::runtime_update::active_yt_dlp_path() {
+    if let Some(path) = crate::runtime_update::active_yt_dlp_path()
+        .and_then(existing_file)
+    {
         return path;
     }
 
@@ -53,21 +76,15 @@ pub fn resolve_bin_path(configured_path: Option<PathBuf>) -> PathBuf {
         return path;
     }
 
-    let bin_name = if cfg!(target_os = "windows") {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    };
     if let Some(paths) = std::env::var_os("PATH") {
         for path in std::env::split_paths(&paths) {
-            let candidate = path.join(bin_name);
-            if candidate.exists() && candidate.is_file() {
+            if let Some(candidate) = existing_file(path.join(bin_name())) {
                 return candidate;
             }
         }
     }
 
-    configured_path.unwrap_or_else(|| PathBuf::from(bin_name))
+    configured_path.unwrap_or_else(|| PathBuf::from(bin_name()))
 }
 
 impl Command {
