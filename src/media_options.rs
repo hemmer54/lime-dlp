@@ -1,15 +1,8 @@
 use std::path::PathBuf;
 
-use iced::widget::{pick_list, text};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Message,
-    app::{FONT_SIZE, SPACING},
-    fl,
-    i18n::dir_row,
-    theme::{pick_list_menu_style, pick_list_style},
-};
+use crate::fl;
 
 #[derive(Deserialize, Serialize, Debug, Default, Copy, Clone)]
 pub struct Options {
@@ -170,116 +163,6 @@ impl AudioQuality {
             AudioQuality::Medium => "4",
             AudioQuality::Low => "6",
         }
-    }
-}
-
-impl Options {
-    pub fn video_resolutions(resolution: VideoResolution) -> iced::widget::Row<'static, Message> {
-        dir_row(vec![
-            text(format!("{}: ", fl!("resolution")))
-                .size(FONT_SIZE)
-                .into(),
-            pick_list(
-                vec![
-                    VideoResolution::Source,
-                    VideoResolution::FourK,
-                    VideoResolution::TwoK,
-                    VideoResolution::FullHD,
-                    VideoResolution::Hd,
-                    VideoResolution::Sd,
-                ],
-                Some(resolution),
-                Message::SelectedResolution,
-            )
-            .text_size(FONT_SIZE)
-            .menu_style(pick_list_menu_style)
-            .style(pick_list_style)
-            .into(),
-        ])
-        .spacing(SPACING)
-        .width(iced::Length::Shrink)
-        .align_y(iced::Alignment::Center)
-    }
-
-    pub fn video_formats(format: VideoFormat) -> iced::widget::Row<'static, Message> {
-        dir_row(vec![
-            text(format!("{}: ", fl!("preferred_format")))
-                .size(FONT_SIZE)
-                .into(),
-            pick_list(
-                vec![
-                    VideoFormat::Mp4,
-                    VideoFormat::Mkv,
-                    VideoFormat::Webm,
-                    VideoFormat::Avi,
-                    VideoFormat::Mov,
-                    VideoFormat::Flv,
-                ],
-                Some(format),
-                Message::SelectedVideoFormat,
-            )
-            .text_size(FONT_SIZE)
-            .menu_style(pick_list_menu_style)
-            .style(pick_list_style)
-            .into(),
-        ])
-        .width(iced::Length::Shrink)
-        .spacing(SPACING)
-        .align_y(iced::Alignment::Center)
-    }
-
-    pub fn audio_formats(format: AudioFormat) -> iced::widget::Row<'static, Message> {
-        dir_row(vec![
-            text(format!("{}: ", fl!("preferred_format")))
-                .size(FONT_SIZE)
-                .into(),
-            pick_list(
-                vec![
-                    AudioFormat::Mp3,
-                    AudioFormat::Original,
-                    AudioFormat::M4a,
-                    AudioFormat::Opus,
-                    AudioFormat::Flac,
-                    AudioFormat::Wav,
-                    AudioFormat::Vorbis,
-                ],
-                Some(format),
-                Message::SelectedAudioFormat,
-            )
-            .text_size(FONT_SIZE)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style)
-            .into(),
-        ])
-        .width(iced::Length::Shrink)
-        .spacing(SPACING)
-        .align_y(iced::Alignment::Center)
-    }
-
-    pub fn audio_qualities(quality: AudioQuality) -> iced::widget::Row<'static, Message> {
-        dir_row(vec![
-            text(format!("{}: ", fl!("quality"))).size(FONT_SIZE).into(),
-            pick_list(
-                vec![
-                    AudioQuality::Best,
-                    AudioQuality::Ultra,
-                    AudioQuality::VeryHigh,
-                    AudioQuality::High,
-                    AudioQuality::Good,
-                    AudioQuality::Medium,
-                    AudioQuality::Low,
-                ],
-                Some(quality),
-                Message::SelectedAudioQuality,
-            )
-            .text_size(FONT_SIZE)
-            .style(pick_list_style)
-            .menu_style(pick_list_menu_style)
-            .into(),
-        ])
-        .width(iced::Length::Shrink)
-        .spacing(SPACING)
-        .align_y(iced::Alignment::Center)
     }
 }
 

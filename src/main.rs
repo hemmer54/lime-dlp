@@ -1,18 +1,16 @@
 #![windows_subsystem = "windows"]
 
-use iced::{
-    Point,
-    window::{self, Position},
-};
+use gpui_kit::component::{Root, Theme, ThemeMode, TitleBar};
+use gpui_kit::*;
 use lime_dlp::{
-    Config, Flags, YtGUI, git_hash, logging, theme::ytdlp_gui_theme, update::check_for_update,
+    Config, Flags, Message, WindowSize, YtGUI, git_hash, logging, update::check_for_update,
 };
+use std::borrow::Cow;
 
-fn main() -> iced::Result {
-    let mut args = std::env::args();
-
+fn main() {
+    let mut args = std::env::args().skip(1);
     let mut url = None;
-    if let Some(arg) = args.nth(1) {
+    if let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
             println!("Usage: lime-dlp <OPTIONS>\n");
             println!("Options:");
@@ -29,7 +27,7 @@ fn main() -> iced::Result {
             println!("git hash: {git_hash}");
             std::process::exit(0);
         } else if arg == "--url" || arg == "-u" {
-            url = std::env::args().nth(2);
+            url = args.next();
         } else {
             println!("Invalid option/argument");
             std::process::exit(1);
@@ -44,17 +42,16 @@ fn main() -> iced::Result {
     let config_dir = dirs::config_dir()
         .expect("config directory")
         .join("lime-dlp/");
-
     std::fs::create_dir_all(&config_dir).expect("create config dir");
 
-    let config = match std::fs::read_to_string(config_dir.join("config.toml")) {
-        Ok(config_str) => toml::from_str::<Config>(&config_str).unwrap_or_else(|e| {
-            tracing::error!("failed to parse config: {e:#?}");
+    let mut config = match std::fs::read_to_string(config_dir.join("config.toml")) {
+        Ok(config_str) => toml::from_str::<Config>(&config_str).unwrap_or_else(|error| {
+            tracing::error!("failed to parse config: {error:#?}");
             let config = Config::default();
             tracing::warn!("falling back to default configs: {config:#?}");
             config
         }),
-        Err(e) => match e.kind() {
+        Err(error) => match error.kind() {
             std::io::ErrorKind::NotFound => {
                 let config = Config::default();
                 tracing::warn!(
@@ -62,54 +59,89 @@ fn main() -> iced::Result {
                 );
                 config
             }
-            _ => panic!("{e}"),
+            _ => panic!("{error}"),
         },
     };
-
-    let position = if config.save_window_position {
-        if let Some(window_pos) = &config.window_position {
-            Position::Specific(Point::new(window_pos.x, window_pos.y))
-        } else {
-            Position::default()
-        }
-    } else {
-        Position::default()
-    };
-
+    config.migrate_legacy_bin_path();
     let flags = Flags { url, config };
 
-    let window_size = flags
-        .config
-        .window_size
-        .map(|s| iced::Size::new(s.width, s.height))
-        .unwrap_or(iced::Size::new(920., 540.));
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let update_sender = sender.clone();
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| runtime.block_on(check_for_update()))
+            .unwrap_or_else(|error| {
+                Err(lime_dlp::update::Error::UpdateFetchFailed(
+                    error.to_string(),
+                ))
+            });
+        let _ = update_sender.send(Message::UpdateCheck(result));
+    });
 
-    iced::application(
-        move || {
-            let flags = flags.clone();
-            let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
-            (
-                YtGUI::new(flags, sender),
-                iced::Task::batch([
-                    iced::Task::stream(receiver),
-                    iced::Task::perform(check_for_update(), lime_dlp::Message::UpdateCheck),
-                ]),
-            )
-        },
-        YtGUI::update,
-        YtGUI::view,
-    )
-    .title(YtGUI::title)
-    .antialiasing(true)
-    .window(window::Settings {
-        size: window_size,
-        resizable: true,
-        exit_on_close_request: false,
-        position,
-        ..Default::default()
-    })
-    .subscription(YtGUI::subscription)
-    .font(iced_fonts::REQUIRED_FONT_BYTES)
-    .theme(ytdlp_gui_theme)
-    .run()
+    let runtime_update_sender = sender.clone();
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())
+            .and_then(|runtime| {
+                runtime
+                    .block_on(lime_dlp::runtime_update::check_for_update())
+                    .map_err(|error| error.to_string())
+            });
+        let _ = runtime_update_sender.send(Message::RuntimeUpdateCheck(result));
+    });
+
+    gpui_kit::application().run(move |cx| {
+        gpui_kit::init(cx);
+        cx.text_system()
+            .add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../assets/fonts/FSEX302.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/jh_fallout-webfont.ttf").as_slice()),
+            ])
+            .expect("failed to load embedded fonts");
+        Theme::change(ThemeMode::Dark, None, cx);
+        Theme::global_mut(cx).font_family = "Fixedsys Excelsior".into();
+
+        let window_size = flags.config.window_size.unwrap_or(WindowSize {
+            width: 920.0,
+            height: 540.0,
+        });
+        let size = gpui::size(gpui::px(window_size.width), gpui::px(window_size.height));
+        let bounds = if flags.config.save_window_position {
+            flags
+                .config
+                .window_position
+                .as_ref()
+                .map(|position| {
+                    WindowBounds::Windowed(Bounds::new(
+                        gpui::point(gpui::px(position.x), gpui::px(position.y)),
+                        size,
+                    ))
+                })
+                .unwrap_or_else(|| WindowBounds::centered(size, cx))
+        } else {
+            WindowBounds::centered(size, cx)
+        };
+
+        let mut options = TitleBar::window_options();
+        options.window_bounds = Some(bounds);
+        options.window_background = WindowBackgroundAppearance::Transparent;
+        options.is_resizable = true;
+        options.is_movable = true;
+        options.window_min_size = Some(gpui::size(gpui::px(720.0), gpui::px(480.0)));
+
+        let flags = flags.clone();
+        let sender = sender.clone();
+        cx.spawn(async move |cx| {
+            cx.open_window(options, |window, cx| {
+                let view = cx.new(|cx| YtGUI::new(flags, sender, receiver, window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .expect("failed to open Lime DLP window");
+        })
+        .detach();
+    });
 }

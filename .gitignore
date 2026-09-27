@@ -1,0 +1,6 @@
+/target/
+/packages/
+/windows/
+/release/
+/bin(assets)/
+/.zed/

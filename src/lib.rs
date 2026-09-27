@@ -1,33 +1,22 @@
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{fs, io};
 
 use app::{DownloadType, Tab};
-use error::DownloadError;
-#[cfg(feature = "explain")]
-use iced::Color;
-
-use chrono::Local;
-use iced::futures::channel::mpsc::UnboundedSender;
-use iced::{Event, Point};
-
-use rfd::AsyncFileDialog;
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 
 mod app;
-mod checkbox;
-mod collapsible;
 pub mod command;
 pub mod cookies;
 mod error;
 pub mod i18n;
 pub mod media_options;
 pub mod progress;
+pub mod runtime_update;
 mod sponsorblock;
-pub mod theme;
 pub mod update;
+
+pub use app::YtGUI;
 
 use sponsorblock::SponsorBlockOption;
 use tracing::Level;
@@ -63,7 +52,7 @@ pub enum Message {
     ProgressEvent(String),
     StartDownload(String),
     StopDownload,
-    IcedEvent(Event),
+
     ToggleSaveWindowPosition(bool),
     SelectYtDlpBinPath,
     SelectedYtDlpBinPath(Option<PathBuf>),
@@ -76,6 +65,10 @@ pub enum Message {
     InputCookiesProfile(String),
     InputCookiesContainer(String),
     UpdateCheck(Result<Option<update::Version>, update::Error>),
+    RuntimeUpdateCheck(Result<Option<runtime_update::RuntimeVersions>, String>),
+    CheckRuntimeUpdates,
+    InstallRuntimeUpdate,
+    RuntimeUpdateFinished(Result<runtime_update::RuntimeVersions, String>),
     OpenLink(String),
     ToggleAdvancedOptions,
     ClearConsole,
@@ -88,8 +81,6 @@ pub enum Message {
     OpenDownloadFolder(DownloadType),
     PasteUrl,
     ClearUrl,
-    EditorAction(iced::widget::text_editor::Action),
-    Noop,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -119,16 +110,7 @@ fn audio_download_folder_default() -> PathBuf {
 }
 
 fn bin_path_default() -> Option<PathBuf> {
-    std::env::current_exe().ok().map(|mut path| {
-        path.pop(); // Remove executable name
-        path.push("assets");
-        path.push(if cfg!(target_os = "windows") {
-            "yt-dlp.exe"
-        } else {
-            "yt-dlp"
-        });
-        path
-    })
+    None
 }
 
 fn empty_string_as_none<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
@@ -213,6 +195,22 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn migrate_legacy_bin_path(&mut self) {
+        let (Some(configured), Some(bundled)) =
+            (self.bin_path.as_ref(), command::bundled_bin_path())
+        else {
+            return;
+        };
+
+        let configured = configured
+            .canonicalize()
+            .unwrap_or_else(|_| configured.clone());
+        let bundled = bundled.canonicalize().unwrap_or(bundled);
+        if configured == bundled {
+            self.bin_path = None;
+        }
+    }
+
     pub fn download_folder_for(&self, download_type: DownloadType) -> &PathBuf {
         match download_type {
             DownloadType::Video => &self.video_download_folder,
@@ -238,131 +236,6 @@ impl Config {
         tracing::info!("Updated config file to {}", current_config);
         Ok(())
     }
-}
-
-pub struct YtGUI {
-    download_link: String,
-    download_link_content: iced::widget::text_editor::Content,
-    is_playlist: bool,
-    get_thumbnail: bool,
-    pub embed_metadata: bool,
-    pub embed_subtitles: bool,
-    pub show_console: bool,
-    force_overwrite: bool,
-    sponsorblock: SponsorBlockOption,
-    config: Config,
-
-    active_tab: Tab,
-    download_type: DownloadType,
-    playlist_progress: Option<String>,
-    download_message: Option<Result<String, DownloadError>>,
-    is_file_dialog_open: bool,
-    download_text_input_id: iced::widget::Id,
-
-    sender: UnboundedSender<Message>,
-    command: command::Command,
-    progress: Option<f32>,
-    window_height: f32,
-    window_width: f32,
-    window_pos: Point,
-    new_version: Option<update::Version>,
-    show_advanced_options: bool,
-    pub log_output: String,
-}
-
-impl YtGUI {
-    pub fn new(
-        flags: Flags,
-        progress_sender: iced::futures::channel::mpsc::UnboundedSender<Message>,
-    ) -> Self {
-        tracing::info!("config loaded: {flags:#?}");
-
-        let initial_link = flags.url.clone().unwrap_or_default();
-
-        Self {
-            download_link: initial_link.clone(),
-            download_link_content: iced::widget::text_editor::Content::with_text(&initial_link),
-            is_playlist: Default::default(),
-            get_thumbnail: Default::default(),
-            embed_metadata: Default::default(),
-            embed_subtitles: Default::default(),
-            show_console: true,
-            force_overwrite: Default::default(),
-            sponsorblock: Default::default(),
-            config: flags.config,
-
-            active_tab: Tab::Video,
-            download_type: DownloadType::Video,
-            playlist_progress: None,
-            download_message: Default::default(),
-            download_text_input_id: iced::widget::Id::unique(),
-
-            sender: progress_sender,
-            command: command::Command::default(),
-            progress: None,
-            window_height: 0.,
-            window_width: 0.,
-            is_file_dialog_open: false,
-            window_pos: Point::default(),
-            new_version: None,
-            show_advanced_options: false,
-            log_output: String::new(),
-        }
-    }
-
-    fn log_download(&self) {
-        let downloads_log_path = dirs::cache_dir()
-            .expect("cache directory")
-            .join("lime-dlp/downloads.log");
-
-        if let Some(parent) = downloads_log_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        if let Ok(mut file) = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&downloads_log_path)
-        {
-            if let Err(e) = writeln!(
-                file,
-                "{}::{}::{}::{}",
-                Local::now(),
-                self.download_link,
-                match self.download_type {
-                    DownloadType::Video => format!(
-                        "{:?}:{:?}",
-                        self.config.options.video_resolution, self.config.options.video_format
-                    ),
-                    DownloadType::Audio => format!(
-                        "{:?}:{:?}",
-                        self.config.options.audio_quality, self.config.options.audio_format
-                    ),
-                },
-                self.config
-                    .download_folder_for(self.download_type)
-                    .to_string_lossy()
-            ) {
-                tracing::error!("failed to log download: {e}");
-            }
-        }
-    }
-}
-
-async fn choose_folder(starting_dir: impl AsRef<Path>) -> Option<PathBuf> {
-    AsyncFileDialog::new()
-        .set_directory(starting_dir)
-        .pick_folder()
-        .await
-        .map(|f| f.path().to_path_buf())
-}
-
-async fn choose_file(starting_dir: impl AsRef<Path>) -> Option<PathBuf> {
-    AsyncFileDialog::new()
-        .set_directory(starting_dir)
-        .pick_file()
-        .await
-        .map(|f| f.path().to_path_buf())
 }
 
 pub fn logging() {

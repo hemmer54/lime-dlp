@@ -8,10 +8,8 @@ use i18n_embed::{
     fluent::{FluentLanguageLoader, fluent_language_loader},
     unic_langid::LanguageIdentifier,
 };
-use iced::{Element, widget::Row};
-use rust_embed::RustEmbed;
 
-use crate::Message;
+use rust_embed::RustEmbed;
 
 /// Applies the requested language(s) to requested translations from the `fl!()` macro.
 pub fn init(requested_languages: &[LanguageIdentifier]) {
@@ -44,11 +42,31 @@ pub static LANGUAGE_LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
 #[macro_export]
 macro_rules! fl {
     ($message_id:literal) => {{
-        i18n_embed_fl::fl!($crate::i18n::LANGUAGE_LOADER, $message_id)
+        $crate::i18n::LANGUAGE_LOADER.get($message_id)
     }};
 
-    ($message_id:literal, $($args:expr),*) => {{
-        i18n_embed_fl::fl!($crate::i18n::LANGUAGE_LOADER, $message_id, $($args), *)
+    ($message_id:literal, $attribute:literal, $($key:ident = $value:expr),+ $(,)?) => {{
+        let mut args = ::std::collections::HashMap::new();
+        $(args.insert(stringify!($key), $value.into());)+
+        $crate::i18n::LANGUAGE_LOADER.get_attr_args_concrete($message_id, $attribute, args)
+    }};
+
+    ($message_id:literal, $attribute:literal, $args:expr) => {{
+        $crate::i18n::LANGUAGE_LOADER.get_attr_args($message_id, $attribute, $args)
+    }};
+
+    ($message_id:literal, $attribute:literal) => {{
+        $crate::i18n::LANGUAGE_LOADER.get_attr($message_id, $attribute)
+    }};
+
+    ($message_id:literal, $($key:ident = $value:expr),+ $(,)?) => {{
+        let mut args = ::std::collections::HashMap::new();
+        $(args.insert(stringify!($key), $value.into());)+
+        $crate::i18n::LANGUAGE_LOADER.get_args_concrete($message_id, args)
+    }};
+
+    ($message_id:literal, $args:expr) => {{
+        $crate::i18n::LANGUAGE_LOADER.get_args($message_id, $args)
     }};
 }
 
@@ -61,11 +79,4 @@ pub fn is_rtl() -> bool {
             .as_str(),
         "ar"
     )
-}
-
-pub fn dir_row<'a>(mut children: Vec<Element<'a, Message>>) -> Row<'a, Message> {
-    if is_rtl() {
-        children.reverse();
-    }
-    Row::with_children(children)
 }

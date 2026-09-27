@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use iced::futures::channel::mpsc::UnboundedSender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::error::DownloadError;
 
@@ -19,6 +19,25 @@ pub struct Command {
     videos_num: usize,
 }
 
+pub fn bundled_bin_path() -> Option<PathBuf> {
+    let bin_name = if cfg!(target_os = "windows") {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
+    let executable = std::env::current_exe().ok()?;
+    let executable_dir = executable.parent()?;
+    std::iter::once(executable_dir.to_path_buf())
+        .chain(std::iter::once(executable_dir.join("assets")))
+        .chain(
+            executable_dir
+                .ancestors()
+                .map(|dir| dir.join("bin(assets)")),
+        )
+        .map(|dir| dir.join(bin_name))
+        .find(|path| path.is_file())
+}
+
 pub fn resolve_bin_path(configured_path: Option<PathBuf>) -> PathBuf {
     if let Some(ref path) = configured_path {
         if path.exists() && path.is_file() {
@@ -26,29 +45,12 @@ pub fn resolve_bin_path(configured_path: Option<PathBuf>) -> PathBuf {
         }
     }
 
-    if let Ok(mut exe_path) = std::env::current_exe() {
-        exe_path.pop(); // remove executable name
+    if let Some(path) = crate::runtime_update::active_yt_dlp_path() {
+        return path;
+    }
 
-        let mut bin_in_exe_dir = exe_path.clone();
-        bin_in_exe_dir.push(if cfg!(target_os = "windows") {
-            "yt-dlp.exe"
-        } else {
-            "yt-dlp"
-        });
-        if bin_in_exe_dir.exists() && bin_in_exe_dir.is_file() {
-            return bin_in_exe_dir;
-        }
-
-        let mut bin_in_assets = exe_path.clone();
-        bin_in_assets.push("assets");
-        bin_in_assets.push(if cfg!(target_os = "windows") {
-            "yt-dlp.exe"
-        } else {
-            "yt-dlp"
-        });
-        if bin_in_assets.exists() && bin_in_assets.is_file() {
-            return bin_in_assets;
-        }
+    if let Some(path) = bundled_bin_path() {
+        return path;
     }
 
     let bin_name = if cfg!(target_os = "windows") {
@@ -97,7 +99,16 @@ impl Command {
         self.videos_num = videos_num;
 
         let actual_bin_path = resolve_bin_path(bin_path);
-        let mut command = std::process::Command::new(actual_bin_path);
+        let mut command = std::process::Command::new(&actual_bin_path);
+        if let Some(binary_dir) = actual_bin_path.parent() {
+            if let Some(path) = std::env::var_os("PATH") {
+                let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();
+                paths.insert(0, binary_dir.to_path_buf());
+                if let Ok(path) = std::env::join_paths(paths) {
+                    command.env("PATH", path);
+                }
+            }
+        }
 
         #[cfg(target_os = "windows")]
         {
@@ -148,8 +159,7 @@ impl Command {
             std::thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    let _ = sender
-                        .unbounded_send(crate::Message::ProgressEvent(format!("stderr:{line}")));
+                    let _ = sender.send(crate::Message::ProgressEvent(format!("stderr:{line}")));
                 }
             });
         }
@@ -167,8 +177,7 @@ impl Command {
                             if byte[0] == b'\r' || byte[0] == b'\n' {
                                 if !buffer.is_empty() {
                                     let text = String::from_utf8_lossy(&buffer).to_string();
-                                    let _ =
-                                        sender.unbounded_send(crate::Message::ProgressEvent(text));
+                                    let _ = sender.send(crate::Message::ProgressEvent(text));
                                     buffer.clear();
                                 }
                             } else {

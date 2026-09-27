@@ -1,10 +1,8 @@
-use crate::DownloadError;
-use iced::Length;
-use iced::widget::{column, progress_bar, row, space, text};
+use crate::error::DownloadError;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Message, YtGUI, app::SPACING, theme::danger_button};
+use crate::YtGUI;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
@@ -84,54 +82,6 @@ pub fn parse_progress(progress: &str) -> Result<Vec<Progress>, ProgressError> {
 }
 
 impl YtGUI {
-    pub fn show_download_progress<'a>(
-        &'a self,
-        download_message: &'a Result<String, DownloadError>,
-    ) -> iced::widget::Column<'a, Message> {
-        match download_message {
-            Ok(download_message) => column![
-                row![
-                    text(download_message).align_x(iced::alignment::Horizontal::Center),
-                    space::horizontal(),
-                    text(self.playlist_progress.as_deref().unwrap_or_default()),
-                    danger_button("X")
-                        .on_press(Message::StopDownload)
-                        .padding([5, 25]),
-                ]
-                .spacing(SPACING)
-                .width(iced::Length::Fill)
-                .align_y(iced::Alignment::Center)
-                .padding(12),
-                if let Some(progress) = self.progress {
-                    row![progress_bar(0.0..=100., progress)]
-                        .spacing(SPACING)
-                        .width(iced::Length::Fill)
-                        .align_y(iced::Alignment::Center)
-                        .padding(12)
-                } else {
-                    row![]
-                }
-            ]
-            .width(Length::Fill)
-            .align_x(iced::Alignment::Center),
-            Err(e) => {
-                column![
-                    row![
-                        text(e.to_string()).align_x(iced::alignment::Horizontal::Center),
-                        space::horizontal(),
-                        danger_button("X")
-                            .on_press(Message::StopDownload)
-                            .padding([5, 25]),
-                    ]
-                    .spacing(SPACING)
-                    .width(iced::Length::Fill)
-                    .align_y(iced::Alignment::Center)
-                    .padding(12),
-                ]
-            }
-        }
-    }
-
     pub fn handle_progress_event(&mut self, progress: &str) {
         if !self.command.is_running() {
             return;
