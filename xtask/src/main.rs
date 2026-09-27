@@ -199,6 +199,8 @@ fn package_windows() -> anyhow::Result<()> {
         )?;
     }
 
+    move_windows_runtime_to_assets()?;
+
     println!("Zipping Windows package");
     zip_dir("windows", "packages/lime-dlp-windows-64.zip")?;
 
@@ -366,6 +368,28 @@ fn copy_bundled_windows_runtime() -> anyhow::Result<bool> {
             .with_context(|| format!("copying Windows runtime asset {name}"))?;
     }
     Ok(true)
+}
+
+fn move_windows_runtime_to_assets() -> anyhow::Result<()> {
+    const FILES: [&str; 6] = [
+        "deno.exe",
+        "ffmpeg.exe",
+        "ffplay.exe",
+        "ffprobe.exe",
+        "yt-dlp.exe",
+        "yt.solver.deno.lib.js",
+    ];
+    let assets_dir = Path::new("windows").join("assets");
+    fs::create_dir_all(&assets_dir)?;
+
+    for name in FILES {
+        let source = Path::new("windows").join(name);
+        if source.is_file() {
+            fs::rename(&source, assets_dir.join(name))
+                .with_context(|| format!("moving Windows runtime asset {name}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn package_aur(rel: Option<u8>) -> anyhow::Result<()> {
